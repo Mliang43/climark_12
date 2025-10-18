@@ -8,9 +8,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -22,101 +24,179 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.cs407.climark.ui.viewModels.MapViewModel
 import com.google.android.gms.maps.CameraUpdateFactory
-import com.google.android.gms.maps.model.CameraPosition
-import com.google.android.gms.maps.model.LatLng
-import com.google.maps.android.compose.GoogleMap
-import com.google.maps.android.compose.MarkerComposable
-import com.google.maps.android.compose.MarkerState
-import com.google.maps.android.compose.rememberCameraPositionState
+import com.google.android.gms.maps.model.*
+import com.google.maps.android.compose.*
+import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MapScreen(viewModel: MapViewModel = viewModel()) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val defaultLocation = LatLng(43.0731, -89.4012)
+    var addMode by remember { mutableStateOf(false) }
+    var deleteMode by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember{ SnackbarHostState()}
 
-    val launcher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { result ->
-        val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+    val cameraState = rememberCameraPositionState {
+        position = CameraPosition.fromLatLngZoom(defaultLocation, 12f)
+    }
+
+    LaunchedEffect(Unit) { viewModel.initializeLocationClient(context) }
+
+    LaunchedEffect(uiState.currentLocation) {
+        uiState.currentLocation?.let { location ->
+            cameraState.animate(CameraUpdateFactory.newLatLngZoom(location, 15f))
+        }
+    }
+
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
         viewModel.updateLocationPermission(granted)
-        if (granted) viewModel.getCurrentLocation(context)
+        if (granted) viewModel.getCurrentLocation()
     }
 
     LaunchedEffect(Unit) {
-        val fine = ContextCompat.checkSelfPermission(
+        val granted = ContextCompat.checkSelfPermission(
             context, Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
-        if (fine) {
+        if (granted) {
             viewModel.updateLocationPermission(true)
-            viewModel.getCurrentLocation(context)
-        } else {
-            launcher.launch(
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                )
-            )
-        }
+            viewModel.getCurrentLocation()
+        } else permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
     }
 
-    val default = LatLng(43.0731, -89.4012)
-    val camera = rememberCameraPositionState {
-        position = CameraPosition.fromLatLngZoom(default, 12f)
-    }
+    Box(modifier = Modifier.fillMaxSize()) {
 
-    // Animate camera when location updates
-    LaunchedEffect(uiState.currentLocation) {
-        uiState.currentLocation?.let {
-            camera.animate(CameraUpdateFactory.newLatLngZoom(it, 14f))
-        }
-    }
+        GoogleMap(
+            modifier = Modifier.fillMaxSize(),
+            cameraPositionState = cameraState,
+            properties = MapProperties(isMyLocationEnabled = uiState.locationPermissionGranted),
+            onMapClick = { latLng ->
+                when {
+                    addMode -> {
+                        viewModel.addMarker(latLng)
+                        addMode = false
+                    }
+                    deleteMode -> {
+                        viewModel.removeMarker(latLng)
+                        deleteMode = false
 
-    Scaffold(
-        floatingActionButton = {
-            FloatingActionButton(onClick = {
-                val t = uiState.currentLocation ?: default
-                // move() is not suspend → safe here
-                camera.move(CameraUpdateFactory.newLatLngZoom(t, 14f))
-            }) {
-                Icon(Icons.Default.MyLocation, contentDescription = "Center")
+                    }
+                }
             }
-        }
-    ) { pad ->
-        Box(Modifier.fillMaxSize().padding(pad)) {
-            GoogleMap(
-                modifier = Modifier.fillMaxSize(),
-                cameraPositionState = camera
-            ) {
-                uiState.currentLocation?.let { loc ->
-                    MarkerComposable(state = MarkerState(loc)) {
+        ) {
+            // current location marker
+            uiState.currentLocation?.let { loc ->
+                MarkerComposable(
+                    state = MarkerState(position = loc),
+                    content = {
                         Box(
-                            Modifier
+                            modifier = Modifier
                                 .size(40.dp)
-                                .background(Color(0xFF1976D2), CircleShape)
+                                .background(Color.Blue, shape = CircleShape)
                                 .border(3.dp, Color.White, CircleShape)
                         )
                     }
-                }
+                )
             }
 
-            uiState.weather?.let { w ->
-                Card(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(16.dp)
-                        .fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color.White)
-                ) {
-                    Column(
-                        Modifier.padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("Temperature: ${w.temperature?.toInt()}°C")
-                        Text("Condition: ${w.description}")
+            // user-added markers
+            uiState.markers.forEach { m ->
+                Marker(
+                    state = MarkerState(position = m),
+                    title = "Marker (${m.latitude.format(2)}, ${m.longitude.format(2)})",
+                    onClick = {
+                        if (deleteMode) {
+                            viewModel.removeMarker(m)
+                            deleteMode = false
+                            true // consume click
+                        } else {
+                            // Fetch weather when a marker is tapped
+                            viewModel.fetchWeather(m.latitude, m.longitude)
+                            coroutineScope.launch {
+                                cameraState.animate(CameraUpdateFactory.newLatLngZoom(m, 12f))
+                            }
+                            true // consume click to show weather card
                     }
+                )
+                    }
+        }
+
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(bottom = 120.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+
+            FloatingActionButton(onClick = {
+                addMode = true
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("Tap Anywhere on the map to add a Marker")
+                }
+            }) { Icon(
+                imageVector = Icons.Filled.Add,
+                contentDescription = "Add",
+                modifier = Modifier.size (50.dp)) }
+
+            FloatingActionButton(onClick = {
+                deleteMode = true
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("Tap on a marker to remove it or anywhere else to cancel")
+                }
+            }) { Icon(
+                imageVector = Icons.Filled.Delete,
+                contentDescription = "Delete",
+                modifier = Modifier.size (50.dp)) }
+
+            FloatingActionButton(onClick = {
+                uiState.currentLocation?.let { location ->
+                    coroutineScope.launch {
+                        cameraState.animate(CameraUpdateFactory.newLatLngZoom(location, 15f))
+                    }
+
+                }
+            }) { Icon(
+                imageVector = Icons.Filled.LocationOn,
+                contentDescription = "Your Location",
+                modifier = Modifier.size (50.dp)
+            ) }
+
+        }
+        if (uiState.weatherInfo != null && !uiState.isLoading) {
+            Card(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD))
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Weather at marker", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Text(uiState.weatherInfo ?: "")
                 }
             }
+        } else if (uiState.isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(16.dp)
+            )
         }
+
+
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 50.dp))
     }
 }
+
+private fun Double.format(d: Int) = "%.${d}f".format(this)
