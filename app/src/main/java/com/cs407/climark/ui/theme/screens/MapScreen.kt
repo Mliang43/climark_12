@@ -37,7 +37,7 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
     var addMode by remember { mutableStateOf(false) }
     var deleteMode by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
-    val snackbarHostState = remember{ SnackbarHostState()}
+    val snackbarHostState = remember { SnackbarHostState() }
 
     val cameraState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(defaultLocation, 12f)
@@ -51,12 +51,11 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
         }
     }
 
-
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         viewModel.updateLocationPermission(granted)
-        if (granted) viewModel.getCurrentLocation()
+        if (granted) viewModel.getCurrentLocation(context)
     }
 
     LaunchedEffect(Unit) {
@@ -65,7 +64,7 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
         ) == PackageManager.PERMISSION_GRANTED
         if (granted) {
             viewModel.updateLocationPermission(true)
-            viewModel.getCurrentLocation()
+            viewModel.getCurrentLocation(context)
         } else permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
     }
 
@@ -76,6 +75,9 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
             cameraPositionState = cameraState,
             properties = MapProperties(isMyLocationEnabled = uiState.locationPermissionGranted),
             onMapClick = { latLng ->
+                // Step 6: Hide weather card when map is tapped
+                viewModel.clearWeather()
+
                 when {
                     addMode -> {
                         viewModel.addMarker(latLng)
@@ -84,7 +86,6 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
                     deleteMode -> {
                         viewModel.removeMarker(latLng)
                         deleteMode = false
-
                     }
                 }
             }
@@ -115,59 +116,70 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
                             deleteMode = false
                             true // consume click
                         } else {
-                            // Fetch weather when a marker is tapped
+                            // Step 5: Fetch weather when a marker is tapped
                             viewModel.fetchWeather(m.latitude, m.longitude)
                             coroutineScope.launch {
                                 cameraState.animate(CameraUpdateFactory.newLatLngZoom(m, 12f))
                             }
                             true // consume click to show weather card
+                        }
                     }
                 )
-                    }
+            }
         }
 
-
+        // Floating Action Buttons
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-
             FloatingActionButton(onClick = {
+                viewModel.clearWeather() // Step 6: hide card on FAB click
                 addMode = true
                 coroutineScope.launch {
-                    snackbarHostState.showSnackbar("Tap Anywhere on the map to add a Marker")
+                    snackbarHostState.showSnackbar("Tap anywhere on the map to add a marker")
                 }
-            }) { Icon(
-                imageVector = Icons.Filled.Add,
-                contentDescription = "Add",
-                modifier = Modifier.size (50.dp)) }
+            }) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = "Add",
+                    modifier = Modifier.size(50.dp)
+                )
+            }
 
             FloatingActionButton(onClick = {
+                viewModel.clearWeather() // Step 6
                 deleteMode = true
                 coroutineScope.launch {
-                    snackbarHostState.showSnackbar("Tap on a marker to remove it or anywhere else to cancel")
+                    snackbarHostState.showSnackbar("Tap a marker to delete or tap anywhere to cancel")
                 }
-            }) { Icon(
-                imageVector = Icons.Filled.Delete,
-                contentDescription = "Delete",
-                modifier = Modifier.size (50.dp)) }
+            }) {
+                Icon(
+                    imageVector = Icons.Filled.Delete,
+                    contentDescription = "Delete",
+                    modifier = Modifier.size(50.dp)
+                )
+            }
 
             FloatingActionButton(onClick = {
+                viewModel.clearWeather() // Step 6
                 uiState.currentLocation?.let { location ->
                     coroutineScope.launch {
                         cameraState.animate(CameraUpdateFactory.newLatLngZoom(location, 15f))
                     }
-
                 }
-            }) { Icon(
-                imageVector = Icons.Filled.LocationOn,
-                contentDescription = "Your Location",
-                modifier = Modifier.size (50.dp)
-            ) }
-
+            }) {
+                Icon(
+                    imageVector = Icons.Filled.LocationOn,
+                    contentDescription = "Your Location",
+                    modifier = Modifier.size(50.dp)
+                )
+            }
         }
+
+        // Weather Info Card or Loading Spinner
         if (uiState.weatherInfo != null && !uiState.isLoading) {
             Card(
                 modifier = Modifier
@@ -189,13 +201,13 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
             )
         }
 
-
-
+        // Snackbar
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 50.dp))
+                .padding(bottom = 50.dp)
+        )
     }
 }
 
