@@ -7,18 +7,15 @@ import androidx.lifecycle.viewModelScope
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.model.LatLng
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+
+// --------- Retrofit imports ---------
 import retrofit2.http.GET
 import retrofit2.http.Query
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
 
-// ---------- Retrofit data + service ----------
-
+// --------- Retrofit data models ---------
 data class WeatherApiResponse(
     val latitude: Double,
     val longitude: Double,
@@ -33,44 +30,42 @@ data class DailyData(
     val precipitation_probability_mean: List<Double>?
 )
 
+// --------- Retrofit API service ---------
 interface WeatherApiService {
     @GET("v1/forecast")
     suspend fun getWeatherData(
         @Query("latitude") latitude: Double,
         @Query("longitude") longitude: Double,
-        @Query("daily")
-        daily: String =
-            "temperature_2m_max,temperature_2m_min,precipitation_probability_mean",
+        @Query("daily") daily: String = "temperature_2m_max,temperature_2m_min,precipitation_probability_mean",
         @Query("timezone") timezone: String = "auto",
-        @Query("past_days") pastDays: Int = 2,
-        @Query("forecast_days") forecastDays: Int = 2
+        @Query("past_days") pastDays: Int = 3,
+        @Query("forecast_days") forecastDays: Int = 4
     ): WeatherApiResponse
 }
 
+// --------- Retrofit instance ---------
 object RetrofitInstance {
     private const val BASE_URL = "https://api.open-meteo.com/"
     val weatherApi: WeatherApiService by lazy {
-        Retrofit.Builder()
+        retrofit2.Retrofit.Builder()
             .baseUrl(BASE_URL)
-            .addConverterFactory(GsonConverterFactory.create())
+            .addConverterFactory(retrofit2.converter.gson.GsonConverterFactory.create())
             .build()
             .create(WeatherApiService::class.java)
     }
 }
 
-// ---------- UI State ----------
-
+// --------- Map state ---------
 data class MapState(
-    val markers: List<LatLng> = emptyList(),
     val currentLocation: LatLng? = null,
     val locationPermissionGranted: Boolean = false,
     val isLoading: Boolean = false,
-    val weatherInfo: String? = null,
+    val weatherData: WeatherApiResponse? = null,
+    val markers: List<LatLng> = emptyList(),
     val error: String? = null
 )
 
-// ---------- ViewModel ----------
-
+// --------- ViewModel ---------
 class MapViewModel : ViewModel() {
 
     private val _uiState = MutableStateFlow(MapState())
@@ -79,8 +74,9 @@ class MapViewModel : ViewModel() {
     private var fusedLocationClient: FusedLocationProviderClient? = null
 
     fun initializeLocationClient(context: Context) {
-        if (fusedLocationClient == null)
+        if (fusedLocationClient == null) {
             fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
+        }
     }
 
     fun updateLocationPermission(granted: Boolean) {
@@ -88,7 +84,17 @@ class MapViewModel : ViewModel() {
     }
 
     fun clearWeather() {
-        _uiState.value = _uiState.value.copy(weatherInfo = null)
+        _uiState.value = _uiState.value.copy(weatherData = null)
+    }
+
+    fun addMarker(latLng: LatLng) {
+        val updatedMarkers = _uiState.value.markers + latLng
+        _uiState.value = _uiState.value.copy(markers = updatedMarkers)
+    }
+
+    fun removeMarker(latLng: LatLng) {
+        val updatedMarkers = _uiState.value.markers.filterNot { it == latLng }
+        _uiState.value = _uiState.value.copy(markers = updatedMarkers)
     }
 
     @SuppressLint("MissingPermission")
@@ -100,9 +106,12 @@ class MapViewModel : ViewModel() {
                 val coords = if (location != null)
                     LatLng(location.latitude, location.longitude)
                 else
-                    LatLng(43.0731, -89.4012) // fallback Madison
+                    LatLng(43.0731, -89.4012) // fallback: Madison
 
-                _uiState.value = _uiState.value.copy(currentLocation = coords, isLoading = false)
+                _uiState.value = _uiState.value.copy(
+                    currentLocation = coords,
+                    isLoading = false
+                )
             }?.addOnFailureListener { e ->
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
@@ -112,45 +121,19 @@ class MapViewModel : ViewModel() {
         }
     }
 
-    fun addMarker(latLng: LatLng) {
-        val updated = _uiState.value.markers + latLng
-        _uiState.value = _uiState.value.copy(markers = updated)
-    }
-
-    fun removeMarker(latLng: LatLng) {
-        val updated = _uiState.value.markers.filterNot {
-            it.latitude == latLng.latitude && it.longitude == latLng.longitude
-        }
-        _uiState.value = _uiState.value.copy(markers = updated)
-    }
-
-    // ---------- Fetch weather via Retrofit ----------
     fun fetchWeather(latitude: Double, longitude: Double) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             try {
-                val response = withContext(Dispatchers.IO) {
-                    RetrofitInstance.weatherApi.getWeatherData(latitude, longitude)
-                }
-
-                val daily = response.daily
-                val info = buildString {
-                    appendLine("Location: %.2f, %.2f".format(response.latitude, response.longitude))
-                    appendLine("Days: ${daily.time.take(4).joinToString()}")
-                    appendLine("Max Temps: ${daily.temperature_2m_max.take(4).joinToString()}")
-                    appendLine("Min Temps: ${daily.temperature_2m_min.take(4).joinToString()}")
-                    appendLine("Precipitation: ${daily.precipitation_probability_mean?.take(4)?.joinToString()}")
-                }
-
+                val response = RetrofitInstance.weatherApi.getWeatherData(latitude, longitude)
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    weatherInfo = info
+                    weatherData = response
                 )
-
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    error = "Error fetching weather: ${e.message}"
+                    error = e.message
                 )
             }
         }

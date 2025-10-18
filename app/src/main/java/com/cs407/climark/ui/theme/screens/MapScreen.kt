@@ -18,15 +18,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.cs407.climark.R
 import com.cs407.climark.ui.viewModels.MapViewModel
 import com.google.android.gms.maps.CameraUpdateFactory
-import com.google.android.gms.maps.model.*
+import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.*
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,9 +81,7 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
             cameraPositionState = cameraState,
             properties = MapProperties(isMyLocationEnabled = uiState.locationPermissionGranted),
             onMapClick = { latLng ->
-                // Step 6: Hide weather card when map is tapped
-                viewModel.clearWeather()
-
+                viewModel.clearWeather() // Hide weather card when map tapped
                 when {
                     addMode -> {
                         viewModel.addMarker(latLng)
@@ -90,7 +94,7 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
                 }
             }
         ) {
-            // current location marker
+            // Current location marker
             uiState.currentLocation?.let { loc ->
                 MarkerComposable(
                     state = MarkerState(position = loc),
@@ -105,7 +109,7 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
                 )
             }
 
-            // user-added markers
+            // User-added markers
             uiState.markers.forEach { m ->
                 Marker(
                     state = MarkerState(position = m),
@@ -114,14 +118,14 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
                         if (deleteMode) {
                             viewModel.removeMarker(m)
                             deleteMode = false
-                            true // consume click
+                            true
                         } else {
-                            // Step 5: Fetch weather when a marker is tapped
+                            // Fetch weather when marker tapped
                             viewModel.fetchWeather(m.latitude, m.longitude)
                             coroutineScope.launch {
                                 cameraState.animate(CameraUpdateFactory.newLatLngZoom(m, 12f))
                             }
-                            true // consume click to show weather card
+                            true
                         }
                     }
                 )
@@ -136,72 +140,87 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             FloatingActionButton(onClick = {
-                viewModel.clearWeather() // Step 6: hide card on FAB click
+                viewModel.clearWeather()
                 addMode = true
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar("Tap anywhere on the map to add a marker")
                 }
             }) {
-                Icon(
-                    imageVector = Icons.Filled.Add,
-                    contentDescription = "Add",
-                    modifier = Modifier.size(50.dp)
-                )
+                Icon(Icons.Filled.Add, contentDescription = "Add", modifier = Modifier.size(50.dp))
             }
 
             FloatingActionButton(onClick = {
-                viewModel.clearWeather() // Step 6
+                viewModel.clearWeather()
                 deleteMode = true
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar("Tap a marker to delete or tap anywhere to cancel")
                 }
             }) {
-                Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = "Delete",
-                    modifier = Modifier.size(50.dp)
-                )
+                Icon(Icons.Filled.Delete, contentDescription = "Delete", modifier = Modifier.size(50.dp))
             }
 
             FloatingActionButton(onClick = {
-                viewModel.clearWeather() // Step 6
+                viewModel.clearWeather()
                 uiState.currentLocation?.let { location ->
                     coroutineScope.launch {
                         cameraState.animate(CameraUpdateFactory.newLatLngZoom(location, 15f))
                     }
                 }
             }) {
-                Icon(
-                    imageVector = Icons.Filled.LocationOn,
-                    contentDescription = "Your Location",
-                    modifier = Modifier.size(50.dp)
-                )
+                Icon(Icons.Filled.LocationOn, contentDescription = "Your Location", modifier = Modifier.size(50.dp))
             }
         }
 
-        // Weather Info Card or Loading Spinner
-        if (uiState.weatherInfo != null && !uiState.isLoading) {
-            Card(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(12.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD))
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Weather at marker", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Text(uiState.weatherInfo ?: "")
-                }
-            }
-        } else if (uiState.isLoading) {
+        // ✅ New Weather Info Card with Forecast Icons
+        if (uiState.isLoading) {
             CircularProgressIndicator(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(16.dp)
             )
+        } else if (uiState.weatherData != null && uiState.currentLocation != null) {
+            // take non-null locals (safe because of the if condition)
+            val current = uiState.currentLocation!!
+            val weather = uiState.weatherData!!
+            val daily = weather.daily
+            Card(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(12.dp)
+                    .fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F9FF)),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(
+                        text = "Location: %.2f°N %.2f°E".format(current.latitude, current.longitude),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.Black
+                    )
+                    Spacer(Modifier.height(8.dp))
+
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        val days = daily.time.take(5)
+                        val maxTemps = daily.temperature_2m_max.take(5)
+                        val minTemps = daily.temperature_2m_min.take(5)
+                        val precip = daily.precipitation_probability_mean?.take(5) ?: List(5) { 0.0 }
+
+                        items(days.indices.toList()) { i ->
+                            WeatherDayCard(
+                                day = days[i],
+                                maxTemp = maxTemps[i],
+                                minTemp = minTemps[i],
+                                precipitation = precip[i]
+                            )
+                        }
+                    }
+                }
+            }
         }
 
-        // Snackbar
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier
@@ -212,3 +231,48 @@ fun MapScreen(viewModel: MapViewModel = viewModel()) {
 }
 
 private fun Double.format(d: Int) = "%.${d}f".format(this)
+
+// ✅ Card for each weather day
+@Composable
+fun WeatherDayCard(
+    day: String,
+    maxTemp: Double,
+    minTemp: Double,
+    precipitation: Double
+) {
+    val iconRes = when {
+        precipitation > 60 -> R.drawable.thunderstorm
+        precipitation in 40.0..60.0 -> R.drawable.rainy
+        precipitation in 20.0..40.0 -> R.drawable.partlycloudy
+        precipitation in 5.0..20.0 -> R.drawable.foggy
+        precipitation in 1.0..5.0 -> R.drawable.drizzle
+        else -> R.drawable.sunny
+    }
+
+    Card(
+        modifier = Modifier
+            .width(85.dp)
+            .padding(4.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(day.takeLast(2).uppercase(), style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+            Spacer(Modifier.height(4.dp))
+            Icon(
+                painter = painterResource(id = iconRes),
+                contentDescription = "Weather Icon",
+                tint = Color.Unspecified,
+                modifier = Modifier.size(36.dp)
+            )
+            Spacer(Modifier.height(4.dp))
+            Text("${precipitation.toInt()}%", style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(2.dp))
+            Text("${maxTemp.toInt()}°", style = MaterialTheme.typography.bodyMedium, color = Color.Black)
+            Text("${minTemp.toInt()}°", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        }
+    }
+}
